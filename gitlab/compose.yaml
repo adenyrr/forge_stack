@@ -10,7 +10,7 @@ services:
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'https://${GITLAB_HOSTNAME}'
-        registry_external_url '${REGISTRY_HOSTNAME}'
+        registry_external_url 'https://${REGISTRY_HOSTNAME}'
 
         # Configuration nginx
 
