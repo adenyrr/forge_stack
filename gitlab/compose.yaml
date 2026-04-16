@@ -1,0 +1,60 @@
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: gitlab-ce
+    restart: always
+    hostname: ${GITLAB_HOSTNAME:-localhost}
+    networks:
+      - gitlab-net
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'https://${GITLAB_HOSTNAME:-localhost}'
+        # Optimisation RAM (Réduction des workers et désactivation monitoring)
+        puma['worker_processes'] = 2
+        puma['min_threads'] = 1
+        puma['max_threads'] = 2
+        sidekiq['max_concurrency'] = 10
+        prometheus_monitoring['enable'] = false
+        postgresql['shared_buffers'] = "256MB"
+        # Configuration SSH
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+    ports:
+      - '80:80'
+      - '443:443'
+      - '2222:22'
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    shm_size: '256m'
+    healthcheck:
+      test: ["CMD", "/usr/bin/gitlab-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: gitlab-runner
+    restart: always
+    networks:
+      - gitlab-net
+    depends_on:
+      gitlab:
+        condition: service_healthy
+    volumes:
+      - gitlab-runner-config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Le runner a besoin d'accéder au hostname de gitlab sur le réseau interne
+    extra_hosts:
+      - "${GITLAB_HOSTNAME:-localhost}:host-gateway"
+
+networks:
+  gitlab-net:
+    driver: bridge
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+  gitlab-runner-config:
