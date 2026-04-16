@@ -87,11 +87,11 @@ services:
       - ./certs/step-root-ca.crt:/etc/gitlab/trusted-certs/step-root-ca.crt
     shm_size: '256m'
     healthcheck:
-      test: ["CMD", "/usr/bin/gitlab-healthcheck"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "-k", "https://localhost/-/health"]
+      interval: 60s
       timeout: 10s
       retries: 5
-
+      start_period: 180s
   runner:
     image: gitlab/gitlab-runner:latest
     container_name: gitlab-runner
