@@ -8,16 +8,64 @@ services:
       - gitlab-net
     environment:
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'https://${GITLAB_HOSTNAME:-localhost}'
+        external_url 'https://${GITLAB_HOSTNAME}'
+
         # Optimisation RAM (Réduction des workers et désactivation monitoring)
+
         puma['worker_processes'] = 2
         puma['min_threads'] = 1
         puma['max_threads'] = 2
         sidekiq['max_concurrency'] = 10
         prometheus_monitoring['enable'] = false
         postgresql['shared_buffers'] = "256MB"
+
         # Configuration SSH
+
         gitlab_rails['gitlab_shell_ssh_port'] = 2222
+
+        # ACME via PKI
+
+        letsencrypt['enable'] = true
+        letsencrypt['acme_production_endpoint'] = '${ACME_URL}'
+        letsencrypt['auto_renew'] = true
+        letsencrypt['auto_renew_hour'] = 3
+        letsencrypt['auto_renew_minute'] = 30
+        letsencrypt['auto_renew_day_of_month'] = "*/7"
+
+        # Trust step-ca root CA pour les appels sortants (OIDC, webhooks)
+
+        gitlab_rails['env'] = {
+          'SSL_CERT_FILE' => '/etc/gitlab/trusted-certs/step-root-ca.crt'
+        }
+
+        # SSH
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+
+        # OIDC Authentik
+
+        gitlab_rails['omniauth_enabled'] = true
+        gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+        gitlab_rails['omniauth_block_auto_created_users'] = false
+        gitlab_rails['omniauth_providers'] = [
+          {
+            name: 'openid_connect',
+            label: 'OIDC',
+            args: {
+              name: 'openid_connect',
+              scope: ['openid', 'profile', 'email'],
+              response_type: 'code',
+              issuer: '${ISSUER}',
+              discovery: true,
+              client_auth_method: 'query',
+              uid_field: 'preferred_username',
+              client_options: {
+                identifier: '${CLIENT_ID}',
+                secret: '${CLIENT_SECRET}',
+                redirect_uri: '${REDIRECT_URL}'
+              }
+            }
+          }
+        ]
     ports:
       - '80:80'
       - '443:443'
@@ -45,7 +93,6 @@ services:
     volumes:
       - gitlab-runner-config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
-    # Le runner a besoin d'accéder au hostname de gitlab sur le réseau interne
     extra_hosts:
       - "${GITLAB_HOSTNAME:-localhost}:host-gateway"
 
