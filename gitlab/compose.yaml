@@ -84,7 +84,7 @@ services:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
       - gitlab-data:/var/opt/gitlab
-      - ./certs/step-root-ca.crt:/etc/gitlab/trusted-certs/step-root-ca.crt:ro
+      - ./certs/step-root-ca.crt:/etc/gitlab/trusted-certs/step-root-ca.crt
     shm_size: '256m'
     healthcheck:
       test: ["CMD", "/usr/bin/gitlab-healthcheck"]
@@ -104,7 +104,7 @@ services:
     volumes:
       - gitlab-runner-config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./certs/step-root-ca.crt:/etc/gitlab/trusted-certs/step-root-ca.crt:ro
+      - ./certs/step-root-ca.crt:/etc/gitlab/trusted-certs/step-root-ca.crt
     extra_hosts:
       - "${GITLAB_HOSTNAME:-localhost}:host-gateway"
 
