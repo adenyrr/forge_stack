@@ -22,6 +22,8 @@ services:
 
         nginx['listen_port']   = 80
         nginx['listen_https']  = false
+        registry_nginx['listen_port']  = 5050
+        registry_nginx['listen_https'] = false
         letsencrypt['enable']  = false
 
         nginx['real_ip_trusted_addresses'] = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
@@ -113,23 +115,33 @@ services:
       traefik.enable: "true"
       traefik.docker.network: "traefik"
 
-      # ── Service ──────────────────────────────────────────────────────
+      # ── Services ─────────────────────────────────────────────────────
       traefik.http.services.gitlab-svc.loadbalancer.server.port: "80"
       traefik.http.services.gitlab-svc.loadbalancer.server.scheme: "http"
+      traefik.http.services.registry-svc.loadbalancer.server.port: "5050"
+      traefik.http.services.registry-svc.loadbalancer.server.scheme: "http"
 
-      # ── Redirect HTTP → HTTPS ─────────────────────────────────────────
+      # ── Redirects HTTP → HTTPS ────────────────────────────────────────
       traefik.http.routers.gitlab-http.rule: "Host(`${GITLAB_HOSTNAME}`)"
       traefik.http.routers.gitlab-http.entrypoints: "web"
       traefik.http.routers.gitlab-http.middlewares: "redirect-https@file"
+      traefik.http.routers.registry-http.rule: "Host(`${REGISTRY_HOSTNAME}`)"
+      traefik.http.routers.registry-http.entrypoints: "web"
+      traefik.http.routers.registry-http.middlewares: "redirect-https@file"
 
-      # ── HTTPS + ACME TLS-ALPN-01 ──────────────────────────────────────
-      # Le certresolver "cloudflare" doit être configuré dans Traefik avec :
-      #   certificatesResolvers.cloudflare.acme.tlsChallenge: true
+      # ── GitLab HTTPS ──────────────────────────────────────────────────
       traefik.http.routers.gitlab-https.rule: "Host(`${GITLAB_HOSTNAME}`)"
       traefik.http.routers.gitlab-https.entrypoints: "websecure"
       traefik.http.routers.gitlab-https.tls: "true"
-      traefik.http.routers.gitlab-https.tls.certresolver: "cloudflare"
+      traefik.http.routers.gitlab-https.tls.certresolver: "letsencrypt"
       traefik.http.routers.gitlab-https.service: "gitlab-svc"
+
+      # ── Registry HTTPS ────────────────────────────────────────────────
+      traefik.http.routers.registry-https.rule: "Host(`${REGISTRY_HOSTNAME}`)"
+      traefik.http.routers.registry-https.entrypoints: "websecure"
+      traefik.http.routers.registry-https.tls: "true"
+      traefik.http.routers.registry-https.tls.certresolver: "letsencrypt"
+      traefik.http.routers.registry-https.service: "registry-svc"
 
   gitlab-runner:
     image: gitlab/gitlab-runner:latest
