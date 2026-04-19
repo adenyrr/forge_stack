@@ -123,9 +123,11 @@ services:
       traefik.http.routers.gitlab-http.rule: "Host(`${GITLAB_HOSTNAME}`)"
       traefik.http.routers.gitlab-http.entrypoints: "web"
       traefik.http.routers.gitlab-http.middlewares: "redirect-https@file"
+      traefik.http.routers.gitlab-http.service: "gitlab-svc"
       traefik.http.routers.registry-http.rule: "Host(`${REGISTRY_HOSTNAME}`)"
       traefik.http.routers.registry-http.entrypoints: "web"
       traefik.http.routers.registry-http.middlewares: "redirect-https@file"
+      traefik.http.routers.registry-http.service: "registry-svc"
 
       # ── GitLab HTTPS ──────────────────────────────────────────────────
       traefik.http.routers.gitlab-https.rule: "Host(`${GITLAB_HOSTNAME}`)"
