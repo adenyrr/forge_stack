@@ -106,7 +106,7 @@ services:
       - gitlab-data:/var/opt/gitlab
     shm_size: '256m'
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost/-/health"]
+      test: ["CMD", "curl", "-f", "-k", "http://localhost/-/health"]
       interval: 60s
       timeout: 10s
       retries: 5
