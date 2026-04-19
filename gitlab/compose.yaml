@@ -67,8 +67,6 @@ services:
 
         gitaly['configuration'] = {
           git: {
-            committer_name: 'GitLab',
-            committer_email: '${GITLAB_EMAIL}',
             signing_key: '/etc/gitlab/gitaly/signing_key',
           },
         }
@@ -148,7 +146,7 @@ services:
     container_name: gitlab-runner
     restart: unless-stopped
     volumes:
-      - ./runner/config:/etc/gitlab-runner
+      - gitlab-runner-config:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - gitlab-net
