@@ -99,7 +99,6 @@ services:
         ]
     ports:
       - '2222:22'
-      - '5000:5000'
     volumes:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
