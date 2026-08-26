@@ -1,10 +1,18 @@
 name: forge
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   gitlab:
-    image: gitlab/gitlab-ce:latest
+    image: gitlab/gitlab-ce:19.0.8-ce.0
     container_name: gitlab-ce
     restart: always
     hostname: ${GITLAB_HOSTNAME:-localhost}
+    logging: *default-logging
     networks:
       - gitlab-net
       - traefik
@@ -45,6 +53,36 @@ services:
         sidekiq['max_concurrency'] = 10
         prometheus_monitoring['enable'] = false
         postgresql['shared_buffers'] = "256MB"
+
+        # ── Optimisation DISQUE ────────────────────────────────────────
+
+        # Rotation agressive des logs (/var/log/gitlab)
+        logging['logrotate_frequency'] = "daily"
+        logging['logrotate_maxsize']   = "50M"
+        logging['logrotate_rotate']    = 7
+        logging['logrotate_compress']  = "compress"
+        logging['logrotate_method']    = "copytruncate"
+        logging['svlogd_size'] = 50 * 1024 * 1024
+        logging['svlogd_num']  = 4
+
+        # Rétention des sauvegardes internes (3 jours)
+        gitlab_rails['backup_keep_time'] = 259200
+
+        # WAL PostgreSQL borné
+        postgresql['max_wal_size'] = "1GB"
+        postgresql['min_wal_size'] = "80MB"
+
+        # Suppression réelle dans le registry (obligatoire pour les
+        # cleanup policies et le garbage collect)
+        registry['storage_delete_enabled'] = true
+
+
+        gitlab_rails['packages_enabled']         = true
+        gitlab_rails['dependency_proxy_enabled'] = true
+        gitlab_rails['terraform_state_enabled']  = true
+        gitlab_kas['enable']    = false
+        gitlab_pages['enable']  = false
+        mattermost['enable']    = false
 
         # Configuration SSH
 
@@ -108,7 +146,7 @@ services:
       interval: 60s
       timeout: 10s
       retries: 5
-      start_period: 180s
+      start_period: 600s
     labels:
       traefik.enable: "true"
       traefik.docker.network: "traefik"
@@ -144,11 +182,13 @@ services:
       traefik.http.routers.registry-https.service: "registry-svc"
 
   gitlab-runner:
-    image: gitlab/gitlab-runner:latest
+    image: gitlab/gitlab-runner:v19.0.3
     container_name: gitlab-runner
     restart: unless-stopped
+    logging: *default-logging
     volumes:
-      - gitlab-runner-config:/etc/gitlab-runner
+      # bind-mount : config.toml éditable et versionnable depuis l'hôte
+      - ./gitlab-runner:/etc/gitlab-runner
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - gitlab-net
@@ -165,6 +205,7 @@ services:
 
 networks:
   gitlab-net:
+    name: gitlab-net
     driver: bridge
   traefik:
     external: true
@@ -173,4 +214,3 @@ volumes:
   gitlab-config:
   gitlab-logs:
   gitlab-data:
-  gitlab-runner-config:
