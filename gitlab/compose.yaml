@@ -8,7 +8,7 @@ x-logging: &default-logging
 
 services:
   gitlab:
-    image: gitlab/gitlab-ce:19.3.0-ce.0
+    image: gitlab/gitlab-ce:19.2.4-ce.0
     container_name: gitlab-ce
     restart: always
     hostname: ${GITLAB_HOSTNAME:-localhost}
@@ -181,7 +181,7 @@ services:
       traefik.http.routers.registry-https.service: "registry-svc"
 
   gitlab-runner:
-    image: gitlab/gitlab-runner:v19.3.0
+    image: gitlab/gitlab-runner:v19.2.1
     container_name: gitlab-runner
     restart: unless-stopped
     logging: *default-logging
