@@ -82,7 +82,6 @@ services:
         gitlab_rails['terraform_state_enabled']  = true
         gitlab_kas['enable']    = false
         gitlab_pages['enable']  = false
-        mattermost['enable']    = false
 
         # Configuration SSH
 
