@@ -11,7 +11,6 @@ services:
     image: gitlab/gitlab-runner:v19.5.2@sha256:6d4cdfe23443fa5463bffa65cba9074a4517f68784756b69bcc362ca86f3d4c6
     container_name: gitlab-runner
     restart: unless-stopped
-    # Ne pas utiliser user: "1001:1001" : le root du namespace est deploy.
     user: "0:0"
     logging: *default-logging
     security_opt:

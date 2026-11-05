@@ -11,13 +11,10 @@ services:
     image: gitlab/gitlab-ce:19.5.3-ce.0@sha256:6863d156a1a477bd6f69fc674b671d0163cd8b06bf63bb17cc4a4a803b78b27c
     container_name: gitlab-ce
     restart: always
-    # UID 0 dans le conteneur = UID 1001 sur l'hôte avec Docker rootless.
-    # Omnibus doit conserver ses UID internes et ses capacités par défaut.
     user: "0:0"
     hostname: ${GITLAB_HOSTNAME:?Définir GITLAB_HOSTNAME}
     logging: *default-logging
     networks:
-      - gitlab-net
       - traefik
     deploy:
       resources:
@@ -180,9 +177,6 @@ services:
       traefik.http.routers.registry-https.service: "registry-svc"
 
 networks:
-  gitlab-net:
-    name: gitlab-net
-    driver: bridge
   traefik:
     name: traefik
     external: true
