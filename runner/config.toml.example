@@ -1,0 +1,20 @@
+# Référence à appliquer au config/config.toml produit par « register ».
+# Le jeton réel reste dans config/ (ignoré par Git), jamais dans ce fichier.
+concurrent = 1
+check_interval = 3
+
+[[runners]]
+  name = "runner-vm"
+  url = "https://gitlab.example.net"
+  token = "REMPLACER_LOCALEMENT_PAR_LE_JETON_D_AUTHENTIFICATION"
+  executor = "docker"
+  [runners.docker]
+    host = "unix:///var/run/docker.sock"
+    image = "alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a"
+    privileged = false
+    tls_verify = false # API Docker locale Unix, pas la validation HTTPS de GitLab.
+    volumes = ["/cache"]
+    cpus = "1"
+    memory = "2g"
+    services_privileged = false
+    # Pas de socket Docker dans les jobs ; pas de Docker-in-Docker privilégié.

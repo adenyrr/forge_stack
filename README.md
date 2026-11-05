@@ -1,93 +1,221 @@
 # forge_stack
 
+Deux projets Compose indépendants, à déployer sur **deux VM** :
 
+- `gitlab-ce/compose.yaml` : GitLab CE, Registry et SSH.
+- `runner/compose.yaml` : GitLab Runner avec exécuteur Docker rootless local.
 
-## Getting started
+Les limites CPU/RAM, la rotation des logs et les options Omnibus (SMTP, OIDC
+Authentik, signature Gitaly, sauvegardes, Registry, optimisations mémoire/disque)
+sont conservées. Les images sont épinglées par version et digest SHA-256.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+### Versions vérifiées le 3 novembre 2026
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+| Image | Dernière version stable retenue | Digest SHA-256 |
+| --- | --- | --- |
+| `gitlab/gitlab-ce` | `19.5.3-ce.0` | `6863d156a1a477bd6f69fc674b671d0163cd8b06bf63bb17cc4a4a803b78b27c` |
+| `gitlab/gitlab-runner` | `v19.5.2` | `6d4cdfe23443fa5463bffa65cba9074a4517f68784756b69bcc362ca86f3d4c6` |
+| `alpine` (image de job par défaut dans les exemples) | `3.24.3` | `be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a` |
 
-## Add your files
+Sources : tags officiels Docker Hub de [GitLab CE](https://hub.docker.com/r/gitlab/gitlab-ce/tags),
+du [Runner](https://hub.docker.com/r/gitlab/gitlab-runner/tags) et
+d'[Alpine](https://hub.docker.com/_/alpine/tags). Les digests des manifestes ont
+été contrôlés directement via `registry-1.docker.io` et correspondent aussi
+aux tags `latest` au moment du contrôle. Les références retenues restent
+immuables : aucun `latest`, `nightly`, `rc` ou `bleeding` n'est utilisé.
+Les digests sont ceux des index multi-architectures, pas d'une seule plateforme.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+**Instance existante : ne pas démarrer directement cette nouvelle image sur
+les anciens volumes sans plan de mise à niveau.** La cible passe de GitLab
+19.2.4 à 19.5.3. Vérifier la version réellement installée et le
+[chemin de mise à niveau officiel](https://docs.gitlab.com/update/upgrade_paths/),
+appliquer le dernier correctif du palier 19.2 (19.2.10 à la date du contrôle)
+avant de rejoindre 19.5.3, et attendre la fin des migrations en arrière-plan
+à chaque étape. Sauvegarder et lire les notes de version avant toute opération.
+La modification de ces fichiers ne réalise aucun déploiement ni migration.
 
+## Prérequis rootless — sur chaque VM
+
+- Docker rootless et Compose v2 installés pour `deploy`, **UID 1001**.
+- Exécuter les commandes comme `deploy`, **sans `sudo docker`**, sur son démon
+  (`DOCKER_HOST=unix:///run/user/1001/docker.sock` ou contexte `rootless`).
+- Socket existant, subuid/subgid configurés, service utilisateur Docker activé
+  et lingering activé par un administrateur (`loginctl enable-linger deploy`).
+- cgroup v2 avec délégation systemd pour appliquer les limites CPU/RAM.
+- Stockage local compatible avec Docker rootless, espace et RAM suffisants
+  pour GitLab (limite conservée : 6 Gio ; prévoir aussi l'OS et Docker).
+
+Vérifier `id -u`, `docker context show`, `docker info` (rootless, cgroups)
+et `test -S /run/user/1001/docker.sock`. Les deux Compose s'exécutent avec
+`user: "0:0"` **dans le namespace rootless**, ce qui correspond à UID 1001
+sur l'hôte. Forcer `user: "1001:1001"` casserait notamment Omnibus.
+Ne pas appliquer de `chown -R 1001` aux données internes GitLab : les UID
+des services sont mappés via les subuid du démon.
+
+## GitLab et Traefik
+
+```sh
+cd gitlab-ce
+cp .env.example .env
+chmod 600 .env
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/adenyrr/forge_stack.git
-git branch -M main
-git push -uf origin main
+
+Renseigner les domaines, le fuseau horaire, SMTP et OIDC, et `TRUSTED_PROXIES`
+(liste d'IP/CIDR séparés par des virgules, sans apostrophe). Cette liste doit
+contenir uniquement les proxies réellement de confiance, y compris le réseau
+Docker de Traefik en mode local et les proxies amont nécessaires ; les plages
+privées complètes ne sont plus implicitement approuvées. Les secrets peuvent
+être injectés par Komodo plutôt qu'écrits dans `.env`. Les valeurs sont
+interpolées dans du Ruby comme dans le Compose initial : échapper les caractères
+Ruby particuliers (apostrophes, antislashs) dans les secrets injectés.
+
+### Traefik sur la VM GitLab (mode par défaut)
+
+Déployer [internal_traefik](https://github.com/adenyrr/internal_traefik) sur le
+**même démon rootless** que GitLab. Il crée le réseau externe `traefik` et utilise
+`/run/user/1001/docker.sock` via son socket-proxy en lecture seule. GitLab ne
+monte aucun socket et ne rejoint pas le réseau privé du socket-proxy.
+
+Les labels utilisent les conventions du dépôt : `websecure`, `letsencrypt`,
+ports internes HTTP 80 et 5050. La redirection HTTP → HTTPS est assurée par
+l'entrypoint `web` d'internal_traefik, sans dépendre d'un middleware inexistant
+`redirect-https@file`. Laisser `HTTP_BIND_IP=127.0.0.1` ; Traefik utilise le réseau
+Docker, pas les ports publiés en boucle locale.
+
+**Ne pas ajouter de ForwardAuth Authentik devant GitLab ou le Registry** :
+GitLab conserve son OIDC natif et les clients Git/Registry leur authentification
+propre. Configurer les DNS et le chemin BunkerWeb → Traefik pour les deux domaines.
+
+### Traefik sur une autre VM (alternative)
+
+Les réseaux bridge et la découverte Docker via socket-proxy **ne traversent
+pas les hôtes**. Ne pas exposer le socket-proxy sur le LAN pour y remédier.
+
+1. Sur GitLab, définir `HTTP_BIND_IP` à l'IP privée joignable de cette VM.
+2. Créer un réseau bridge local `traefik` (`docker network create traefik`) pour
+   satisfaire le Compose ; ce réseau n'établit aucune liaison inter-VM.
+3. Copier `gitlab-ce/traefik-dynamic.example.yaml` dans le dossier `dynamic/`
+   d'internal_traefik, remplacer les domaines et l'IP d'exemple, puis vérifier
+   que le provider fichier l'a chargé. Les labels de GitLab ne sont pas vus
+   par ce Traefik distant ; son socket-proxy reste strictement local.
+4. Autoriser les ports privés 8081 et 5050 **uniquement depuis la VM Traefik**.
+   Configurer `TRUSTED_PROXIES` selon les adresses réellement observées ; le NAT
+   rootless peut modifier l'adresse source. Vérifier les en-têtes et les logs.
+
+Ce mode transporte HTTP entre Traefik et GitLab, comme le backend initial :
+le réserver à un réseau privé filtré/de confiance ou à un tunnel chiffré. Pour
+un réseau non fiable, prévoir TLS sur le backend avec validation des certificats.
+Ne publier ni 8081 ni 5050 sur Internet.
+
+### Démarrage
+
+Depuis `gitlab-ce/`, après préparation de Traefik et des variables :
+
+```sh
+docker compose config --quiet
+docker compose up -d
+docker compose ps
 ```
 
-## Integrate with your tools
+Le démarrage Omnibus peut être long (healthcheck avec délai initial de 600 s).
+Vérifier les deux domaines en HTTPS, l'OIDC, SMTP, un clone Git et un push/pull
+Registry. La clé de signature Gitaly existante doit rester disponible dans
+`/etc/gitlab/gitaly/signing_key` ; ne pas la générer ou la remplacer à l'aveugle.
+SSH reste sur **2222** par défaut, sans passage par le routeur HTTP Traefik :
+filtrer ce port et, si nécessaire, configurer un transfert TCP dédié. Si le port
+public change, adapter `GITLAB_SSH_PORT` et le transfert correspondant.
 
-* [Set up project integrations](https://gitlab.com/adenyrr/forge_stack/-/settings/integrations)
+## Runner — sur sa propre VM
 
-## Collaborate with your team
+Il n'a ni dépendance Compose vers GitLab, ni réseau partagé avec lui, ni port
+entrant, ni route Traefik. Il contacte GitLab en HTTPS via son FQDN, comme les
+conteneurs de jobs : DNS, connectivité et chaîne de confiance TLS doivent être
+valides depuis les deux. Autoriser les sorties nécessaires vers GitLab, le
+Registry, DNS et les dépôts d'images/paquets utilisés par les jobs.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```sh
+cd runner
+cp .env.example .env
+chmod 600 .env
+install -d -m 700 config
+docker compose config --quiet
+```
 
-## Test and Deploy
+Créer le Runner dans l'interface GitLab et récupérer son **jeton
+d'authentification** (`glrt-…`, pas l'ancien jeton d'enregistrement). Depuis
+un shell Bash, saisir le jeton sans l'inscrire dans l'historique :
 
-Use the built-in continuous integration in GitLab.
+```bash
+read -rsp 'Jeton du runner : ' RUNNER_TOKEN
+export RUNNER_TOKEN
+export CI_SERVER_URL=https://gitlab.example.net
+docker compose run --rm -e RUNNER_TOKEN -e CI_SERVER_URL gitlab-runner register \
+  --non-interactive --name runner-vm --executor docker \
+  --docker-host unix:///var/run/docker.sock \
+  --docker-image alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a --docker-volumes /cache
+unset RUNNER_TOKEN CI_SERVER_URL
+chmod 600 config/config.toml
+```
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+Remplacer le domaine avant exécution. Adapter le fichier généré en suivant
+`config.toml.example` : `concurrent = 1`, limites des jobs, `privileged = false`
+et `services_privileged = false`, tout en conservant le vrai jeton. Les limites
+Compose du gestionnaire Runner **ne limitent pas** les jobs lancés comme
+conteneurs frères : les limites de `[runners.docker]` sont donc importantes.
+Les services auxiliaires des jobs consomment aussi les ressources de la VM.
 
-***
+```sh
+docker compose up -d
+docker compose exec gitlab-runner gitlab-runner verify
+docker compose ps
+```
 
-# Editing this README
+Valider ensuite un pipeline avec clone, artifacts et accès au Registry. Si une
+CA privée est utilisée, installer sa chaîne dans le Runner **et** dans les
+images/helper/jobs concernés ; ne pas désactiver la validation TLS.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Le Runner doit pouvoir créer/supprimer des conteneurs : le socket-proxy
+**en lecture seule de Traefik ne convient pas** à l'exécuteur Docker. Il utilise
+directement le socket **rootless de sa VM dédiée**, jamais le socket rootful
+`/var/run/docker.sock` de l'hôte. Ce socket donne le contrôle du démon de
+`deploy` : n'exécuter que des projets de confiance, utiliser les restrictions
+de projets/tags et les runners protégés selon les besoins. Ne pas monter le
+socket dans les jobs ; ne pas activer de DinD privilégié par défaut.
+La configuration runtime, qui contient le jeton, est exclue de Git.
 
-## Suggestions for a good README
+## Migration, sauvegardes et retour arrière
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+- Aucun volume ni conteneur existant n'est modifié par ces fichiers seuls.
+  Planifier une interruption et sauvegarder avant toute bascule.
+- Séparer la migration de VM de la mise à niveau : restaurer d'abord à la
+  version/édition d'origine (adapter temporairement la référence d'image),
+  valider la restauration, puis suivre les paliers vers la cible ci-dessus.
+  Un retour d'image vers une ancienne version après migration de la base
+  n'est pas un rollback sûr : restaurer une sauvegarde compatible.
+- GitLab conserve le nom de projet **`forge`** et ses volumes
+  `forge_gitlab-config`, `forge_gitlab-logs`, `forge_gitlab-data` si le nom
+  d'origine n'avait pas été surchargé avec `-p`/`COMPOSE_PROJECT_NAME`. Relever les
+  noms réellement utilisés avant migration ; ne pas démarrer sur des volumes
+  vides par erreur. Le changement de dossier seul ne migre aucune donnée.
+- Si GitLab reste sur le même démon, arrêter l'ancien projet sans supprimer
+  ses volumes, puis démarrer le nouveau. Sur une autre VM, transférer/restaurer
+  avec la procédure officielle GitLab, **à version/édition identiques**, y
+  compris configuration, `gitlab-secrets.json`, clés SSH/Gitaly et Registry.
+  Les UID mappés peuvent différer entre VM : éviter une copie brute non vérifiée.
+- Mettre l'ancien Runner en pause, attendre les jobs, l'arrêter, puis migrer son
+  ancien dossier `gitlab/gitlab-runner/` vers `runner/config/` sur la VM dédiée,
+  ou enregistrer un nouveau Runner. Corriger dans son `config.toml` les anciennes
+  URL, `host-gateway`, réseaux, chemins de socket/volumes et caches locaux.
+  Ne pas faire tourner simultanément les deux gestionnaires pendant la bascule.
+- La rétention interne de trois jours est conservée, mais **ne planifie pas de
+  sauvegardes**. Prévoir une sauvegarde GitLab, une sauvegarde séparée des
+  configurations/secrets/clés, une copie hors VM et un test de restauration.
+- Retour arrière : arrêter les nouveaux services sans `down -v`, restaurer
+  l'ancien Compose et sa configuration réseau, puis relancer les anciens
+  services sur leurs données conservées. Si des écritures ont eu lieu sur une
+  autre VM, organiser leur restauration cohérente avant retour ; ne jamais
+  démarrer deux instances GitLab sur les mêmes données.
 
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Les changements de pare-feu, DNS, Traefik et les transferts de données décrits
+ici sont des opérations de déploiement à effectuer séparément : ils ne sont
+pas appliqués par ce dépôt.

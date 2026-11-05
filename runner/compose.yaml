@@ -1,0 +1,37 @@
+name: forge-runner
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  gitlab-runner:
+    image: gitlab/gitlab-runner:v19.5.2@sha256:6d4cdfe23443fa5463bffa65cba9074a4517f68784756b69bcc362ca86f3d4c6
+    container_name: gitlab-runner
+    restart: unless-stopped
+    # Ne pas utiliser user: "1001:1001" : le root du namespace est deploy.
+    user: "0:0"
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: ./config
+        target: /etc/gitlab-runner
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SOCKET:-/run/user/1001/docker.sock}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+    # Aucun port entrant, réseau partagé, host-gateway ou depends_on distant.
+    labels:
+      traefik.enable: "false"

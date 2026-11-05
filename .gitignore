@@ -1,0 +1,4 @@
+# Variables et configuration runtime contenant des secrets.
+.git/
+**/.env
+runner/config/

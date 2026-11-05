@@ -8,10 +8,13 @@ x-logging: &default-logging
 
 services:
   gitlab:
-    image: gitlab/gitlab-ce:19.2.4-ce.0
+    image: gitlab/gitlab-ce:19.5.3-ce.0@sha256:6863d156a1a477bd6f69fc674b671d0163cd8b06bf63bb17cc4a4a803b78b27c
     container_name: gitlab-ce
     restart: always
-    hostname: ${GITLAB_HOSTNAME:-localhost}
+    # UID 0 dans le conteneur = UID 1001 sur l'hôte avec Docker rootless.
+    # Omnibus doit conserver ses UID internes et ses capacités par défaut.
+    user: "0:0"
+    hostname: ${GITLAB_HOSTNAME:?Définir GITLAB_HOSTNAME}
     logging: *default-logging
     networks:
       - gitlab-net
@@ -23,8 +26,8 @@ services:
           memory: 6G
     environment:
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'https://${GITLAB_HOSTNAME}'
-        registry_external_url 'https://${REGISTRY_HOSTNAME}'
+        external_url 'https://${GITLAB_HOSTNAME:?Définir GITLAB_HOSTNAME}'
+        registry_external_url 'https://${REGISTRY_HOSTNAME:?Définir REGISTRY_HOSTNAME}'
         gitlab_rails['time_zone'] = '${TZ}'
 
         # TLS géré par Traefik — GitLab nginx en HTTP
@@ -35,10 +38,10 @@ services:
         registry_nginx['listen_https'] = false
         letsencrypt['enable']  = false
 
-        nginx['real_ip_trusted_addresses'] = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+        nginx['real_ip_trusted_addresses'] = '${TRUSTED_PROXIES:?Définir les IP/CIDR des proxies de confiance}'.split(',').map(&:strip)
         nginx['real_ip_header']    = 'X-Forwarded-For'
         nginx['real_ip_recursive'] = 'on'
-        gitlab_rails['trusted_proxies'] = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+        gitlab_rails['trusted_proxies'] = '${TRUSTED_PROXIES:?Définir les IP/CIDR des proxies de confiance}'.split(',').map(&:strip)
 
         nginx['proxy_set_headers'] = {
           "X-Forwarded-Proto" => "https",
@@ -85,7 +88,7 @@ services:
 
         # Configuration SSH
 
-        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        gitlab_rails['gitlab_shell_ssh_port'] = ${GITLAB_SSH_PORT:-2222}
 
         # SMTP
 
@@ -134,7 +137,10 @@ services:
           }
         ]
     ports:
-      - '2222:22'
+      - '${SSH_BIND_IP:-0.0.0.0}:${GITLAB_SSH_PORT:-2222}:22'
+      # Boucle locale par défaut ; interface privée uniquement si Traefik est distant.
+      - '${HTTP_BIND_IP:-127.0.0.1}:${GITLAB_HTTP_PORT:-8081}:80'
+      - '${HTTP_BIND_IP:-127.0.0.1}:${REGISTRY_HTTP_PORT:-5050}:5050'
     volumes:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
@@ -156,15 +162,8 @@ services:
       traefik.http.services.registry-svc.loadbalancer.server.port: "5050"
       traefik.http.services.registry-svc.loadbalancer.server.scheme: "http"
 
-      # ── Redirects HTTP → HTTPS ────────────────────────────────────────
-      traefik.http.routers.gitlab-http.rule: "Host(`${GITLAB_HOSTNAME}`)"
-      traefik.http.routers.gitlab-http.entrypoints: "web"
-      traefik.http.routers.gitlab-http.middlewares: "redirect-https@file"
-      traefik.http.routers.gitlab-http.service: "gitlab-svc"
-      traefik.http.routers.registry-http.rule: "Host(`${REGISTRY_HOSTNAME}`)"
-      traefik.http.routers.registry-http.entrypoints: "web"
-      traefik.http.routers.registry-http.middlewares: "redirect-https@file"
-      traefik.http.routers.registry-http.service: "registry-svc"
+      # HTTP → HTTPS : redirection globale de l'entrypoint web d'internal_traefik.
+      # Aucun middleware redirect-https@file requis.
 
       # ── GitLab HTTPS ──────────────────────────────────────────────────
       traefik.http.routers.gitlab-https.rule: "Host(`${GITLAB_HOSTNAME}`)"
@@ -180,33 +179,12 @@ services:
       traefik.http.routers.registry-https.tls.certresolver: "letsencrypt"
       traefik.http.routers.registry-https.service: "registry-svc"
 
-  gitlab-runner:
-    image: gitlab/gitlab-runner:v19.2.1
-    container_name: gitlab-runner
-    restart: unless-stopped
-    logging: *default-logging
-    volumes:
-      # bind-mount : config.toml éditable et versionnable depuis l'hôte
-      - ./gitlab-runner:/etc/gitlab-runner
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - gitlab-net
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 2G
-    depends_on:
-      gitlab:
-        condition: service_healthy
-    extra_hosts:
-      - "${GITLAB_HOSTNAME:-localhost}:host-gateway"
-
 networks:
   gitlab-net:
     name: gitlab-net
     driver: bridge
   traefik:
+    name: traefik
     external: true
 
 volumes:
