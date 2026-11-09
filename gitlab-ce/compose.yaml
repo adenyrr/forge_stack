@@ -12,38 +12,36 @@ services:
     container_name: gitlab-ce
     restart: always
     user: "0:0"
-    hostname: ${GITLAB_HOSTNAME:?Définir GITLAB_HOSTNAME}
     logging: *default-logging
-    networks:
-      - traefik
     deploy:
       resources:
         limits:
           cpus: "2"
           memory: 6G
     environment:
+      GITLAB_EXTERNAL_URL: ${GITLAB_EXTERNAL_URL:?Définir GITLAB_EXTERNAL_URL}
+      REGISTRY_EXTERNAL_URL: ${REGISTRY_EXTERNAL_URL:?Définir REGISTRY_EXTERNAL_URL}
+      GITLAB_TLS_CERTIFICATE: ${GITLAB_TLS_CERTIFICATE:?Définir GITLAB_TLS_CERTIFICATE}
+      GITLAB_TLS_KEY: ${GITLAB_TLS_KEY:?Définir GITLAB_TLS_KEY}
+      REGISTRY_TLS_CERTIFICATE: ${REGISTRY_TLS_CERTIFICATE:?Définir REGISTRY_TLS_CERTIFICATE}
+      REGISTRY_TLS_KEY: ${REGISTRY_TLS_KEY:?Définir REGISTRY_TLS_KEY}
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'https://${GITLAB_HOSTNAME:?Définir GITLAB_HOSTNAME}'
-        registry_external_url 'https://${REGISTRY_HOSTNAME:?Définir REGISTRY_HOSTNAME}'
+        external_url ENV.fetch('GITLAB_EXTERNAL_URL')
+        registry['enable'] = true
+        gitlab_rails['registry_enabled'] = true
+        registry_external_url ENV.fetch('REGISTRY_EXTERNAL_URL')
         gitlab_rails['time_zone'] = '${TZ}'
 
-        # TLS géré par Traefik — GitLab nginx en HTTP
-
-        nginx['listen_port']   = 80
-        nginx['listen_https']  = false
-        registry_nginx['listen_port']  = 5050
-        registry_nginx['listen_https'] = false
-        letsencrypt['enable']  = false
-
-        nginx['real_ip_trusted_addresses'] = '${TRUSTED_PROXIES:?Définir les IP/CIDR des proxies de confiance}'.split(',').map(&:strip)
-        nginx['real_ip_header']    = 'X-Forwarded-For'
-        nginx['real_ip_recursive'] = 'on'
-        gitlab_rails['trusted_proxies'] = '${TRUSTED_PROXIES:?Définir les IP/CIDR des proxies de confiance}'.split(',').map(&:strip)
-
-        nginx['proxy_set_headers'] = {
-          "X-Forwarded-Proto" => "https",
-          "X-Forwarded-Ssl" => "on"
-        }
+        letsencrypt['enable'] = false
+        gitlab_rails['nginx']['listen_https'] = true
+        gitlab_rails['nginx']['listen_port'] = 443
+        gitlab_rails['nginx']['ssl_certificate'] = ENV.fetch('GITLAB_TLS_CERTIFICATE')
+        gitlab_rails['nginx']['ssl_certificate_key'] = ENV.fetch('GITLAB_TLS_KEY')
+        registry['nginx']['enable'] = true
+        registry['nginx']['listen_https'] = true
+        registry['nginx']['listen_port'] = 443
+        registry['nginx']['ssl_certificate'] = ENV.fetch('REGISTRY_TLS_CERTIFICATE')
+        registry['nginx']['ssl_certificate_key'] = ENV.fetch('REGISTRY_TLS_KEY')
 
         # Optimisation RAM (Réduction des workers et désactivation monitoring)
 
@@ -133,53 +131,31 @@ services:
             }
           }
         ]
+
     ports:
       - '${SSH_BIND_IP:-0.0.0.0}:${GITLAB_SSH_PORT:-2222}:22'
-      # Boucle locale par défaut ; interface privée uniquement si Traefik est distant.
-      - '${HTTP_BIND_IP:-127.0.0.1}:${GITLAB_HTTP_PORT:-8081}:80'
-      - '${HTTP_BIND_IP:-127.0.0.1}:${REGISTRY_HTTP_PORT:-5050}:5050'
+      # Port non privilégié sur l'hôte rootless ; entrée publique 443 à acheminer ici.
+      # GitLab et Registry partagent ce port via leurs noms SNI distincts.
+      - '${HTTPS_BIND_IP:?Définir HTTPS_BIND_IP}:${HTTPS_PORT:-8443}:443'
     volumes:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
       - gitlab-data:/var/opt/gitlab
+      # Monter le répertoire, pas les fichiers : step peut les remplacer atomiquement.
+      - type: bind
+        source: ${TLS_DIRECTORY:?Définir le répertoire existant des certificats}
+        target: /etc/gitlab/ssl
+        read_only: true
+        bind:
+          create_host_path: false
     shm_size: '256m'
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "http://localhost/-/health"]
+      # Sonde locale de disponibilité uniquement ; la validation PKI se teste côté client.
+      test: ["CMD", "curl", "--fail", "--silent", "--insecure", "https://localhost/-/health"]
       interval: 60s
       timeout: 10s
       retries: 5
       start_period: 600s
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: "traefik"
-
-      # ── Services ─────────────────────────────────────────────────────
-      traefik.http.services.gitlab-svc.loadbalancer.server.port: "80"
-      traefik.http.services.gitlab-svc.loadbalancer.server.scheme: "http"
-      traefik.http.services.registry-svc.loadbalancer.server.port: "5050"
-      traefik.http.services.registry-svc.loadbalancer.server.scheme: "http"
-
-      # HTTP → HTTPS : redirection globale de l'entrypoint web d'internal_traefik.
-      # Aucun middleware redirect-https@file requis.
-
-      # ── GitLab HTTPS ──────────────────────────────────────────────────
-      traefik.http.routers.gitlab-https.rule: "Host(`${GITLAB_HOSTNAME}`)"
-      traefik.http.routers.gitlab-https.entrypoints: "websecure"
-      traefik.http.routers.gitlab-https.tls: "true"
-      traefik.http.routers.gitlab-https.tls.certresolver: "letsencrypt"
-      traefik.http.routers.gitlab-https.service: "gitlab-svc"
-
-      # ── Registry HTTPS ────────────────────────────────────────────────
-      traefik.http.routers.registry-https.rule: "Host(`${REGISTRY_HOSTNAME}`)"
-      traefik.http.routers.registry-https.entrypoints: "websecure"
-      traefik.http.routers.registry-https.tls: "true"
-      traefik.http.routers.registry-https.tls.certresolver: "letsencrypt"
-      traefik.http.routers.registry-https.service: "registry-svc"
-
-networks:
-  traefik:
-    name: traefik
-    external: true
 
 volumes:
   gitlab-config:
